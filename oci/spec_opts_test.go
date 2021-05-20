@@ -25,6 +25,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -549,90 +550,6 @@ func TestWithImageConfigArgs(t *testing.T) {
 	}
 }
 
-func TestAddCaps(t *testing.T) {
-	t.Parallel()
-
-	var s specs.Spec
-
-	if err := WithAddedCapabilities([]string{"CAP_CHOWN"})(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-	for i, cl := range [][]string{
-		s.Process.Capabilities.Bounding,
-		s.Process.Capabilities.Effective,
-		s.Process.Capabilities.Permitted,
-		s.Process.Capabilities.Inheritable,
-	} {
-		if !capsContain(cl, "CAP_CHOWN") {
-			t.Errorf("cap list %d does not contain added cap", i)
-		}
-	}
-}
-
-func TestDropCaps(t *testing.T) {
-	t.Parallel()
-
-	var s specs.Spec
-
-	if err := WithAllCapabilities(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-	if err := WithDroppedCapabilities([]string{"CAP_CHOWN"})(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-
-	for i, cl := range [][]string{
-		s.Process.Capabilities.Bounding,
-		s.Process.Capabilities.Effective,
-		s.Process.Capabilities.Permitted,
-		s.Process.Capabilities.Inheritable,
-	} {
-		if capsContain(cl, "CAP_CHOWN") {
-			t.Errorf("cap list %d contains dropped cap", i)
-		}
-	}
-
-	// Add all capabilities back and drop a different cap.
-	if err := WithAllCapabilities(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-	if err := WithDroppedCapabilities([]string{"CAP_FOWNER"})(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-
-	for i, cl := range [][]string{
-		s.Process.Capabilities.Bounding,
-		s.Process.Capabilities.Effective,
-		s.Process.Capabilities.Permitted,
-		s.Process.Capabilities.Inheritable,
-	} {
-		if capsContain(cl, "CAP_FOWNER") {
-			t.Errorf("cap list %d contains dropped cap", i)
-		}
-		if !capsContain(cl, "CAP_CHOWN") {
-			t.Errorf("cap list %d doesn't contain non-dropped cap", i)
-		}
-	}
-
-	// Drop all duplicated caps.
-	if err := WithCapabilities([]string{"CAP_CHOWN", "CAP_CHOWN"})(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-	if err := WithDroppedCapabilities([]string{"CAP_CHOWN"})(context.Background(), nil, nil, &s); err != nil {
-		t.Fatal(err)
-	}
-	for i, cl := range [][]string{
-		s.Process.Capabilities.Bounding,
-		s.Process.Capabilities.Effective,
-		s.Process.Capabilities.Permitted,
-		s.Process.Capabilities.Inheritable,
-	} {
-		if len(cl) != 0 {
-			t.Errorf("cap list %d is not empty", i)
-		}
-	}
-}
-
 func TestDevShmSize(t *testing.T) {
 	t.Parallel()
 	var (
@@ -684,4 +601,60 @@ func getShmSize(opts []string) string {
 		}
 	}
 	return ""
+}
+
+func TestWithoutMounts(t *testing.T) {
+	t.Parallel()
+	var s Spec
+
+	x := func(s string) string {
+		if runtime.GOOS == "windows" {
+			return filepath.Join("C:\\", filepath.Clean(s))
+		}
+		return s
+	}
+	opts := []SpecOpts{
+		WithMounts([]specs.Mount{
+			{
+				Destination: x("/dst1"),
+				Source:      x("/src1"),
+			},
+			{
+				Destination: x("/dst2"),
+				Source:      x("/src2"),
+			},
+			{
+				Destination: x("/dst3"),
+				Source:      x("/src3"),
+			},
+		}),
+		WithoutMounts(x("/dst2"), x("/dst3")),
+		WithMounts([]specs.Mount{
+			{
+				Destination: x("/dst4"),
+				Source:      x("/src4"),
+			},
+		}),
+	}
+
+	expected := []specs.Mount{
+		{
+			Destination: x("/dst1"),
+			Source:      x("/src1"),
+		},
+		{
+			Destination: x("/dst4"),
+			Source:      x("/src4"),
+		},
+	}
+
+	for _, opt := range opts {
+		if err := opt(nil, nil, nil, &s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if !reflect.DeepEqual(expected, s.Mounts) {
+		t.Fatalf("expected %+v, got %+v", expected, s.Mounts)
+	}
 }
